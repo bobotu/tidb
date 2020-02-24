@@ -157,4 +157,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnHeartBeatHistogram)
 	prometheus.MustRegister(GRPCConnTransientFailureCounter)
 	prometheus.MustRegister(TiKVTTLLifeTimeReachCounter)
+	prometheus.MustRegister(PacketIOTimeHistogram)
+	prometheus.MustRegister(UringBatchSizeHistogram)
+	prometheus.MustRegister(UringProcessTimeHistogram)
 }

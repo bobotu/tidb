@@ -35,13 +35,13 @@
 package server
 
 import (
-	"bufio"
 	"io"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/parser/terror"
+	"github.com/pingcap/tidb/server/rin"
 )
 
 const defaultWriterSize = 16 * 1024
@@ -49,20 +49,32 @@ const defaultWriterSize = 16 * 1024
 // packetIO is a helper to read and write data in packet format.
 type packetIO struct {
 	bufReadConn *bufferedReadConn
-	bufWriter   *bufio.Writer
+	bufWriter   *rin.ConnWriter
 	sequence    uint8
 	readTimeout time.Duration
+
+	ring *rin.Ring
+	ctx  *rin.Context
 }
 
-func newPacketIO(bufReadConn *bufferedReadConn) *packetIO {
+func newPacketIO(ring *rin.Ring, bufReadConn *bufferedReadConn) *packetIO {
 	p := &packetIO{sequence: 0}
-	p.setBufferedReadConn(bufReadConn)
+	p.setBufferedReadConn(ring, bufReadConn)
 	return p
 }
 
-func (p *packetIO) setBufferedReadConn(bufReadConn *bufferedReadConn) {
+func (p *packetIO) Close() error {
+	p.ring.Finish(p.ctx)
+	return nil
+}
+
+func (p *packetIO) setBufferedReadConn(ring *rin.Ring, bufReadConn *bufferedReadConn) {
+	p.ring = ring
 	p.bufReadConn = bufReadConn
-	p.bufWriter = bufio.NewWriterSize(bufReadConn, defaultWriterSize)
+	if p.ctx == nil {
+		p.ctx = ring.NewContext()
+	}
+	p.bufWriter = ring.NewWriter(p.ctx, bufReadConn.fd)
 }
 
 func (p *packetIO) setReadTimeout(timeout time.Duration) {

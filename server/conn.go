@@ -60,6 +60,7 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/plugin"
+	"github.com/pingcap/tidb/server/rin"
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/util/arena"
@@ -209,6 +210,8 @@ func (cc *clientConn) Close() error {
 func closeConn(cc *clientConn, connections int) error {
 	metrics.ConnGauge.Set(float64(connections))
 	err := cc.bufReadConn.Close()
+	terror.Log(err)
+	err = cc.pkt.Close()
 	terror.Log(err)
 	if cc.ctx != nil {
 		return cc.ctx.Close()
@@ -1465,13 +1468,31 @@ func (cc *clientConn) writeMultiResultset(ctx context.Context, rss []ResultSet, 
 	return nil
 }
 
+var ring *rin.Ring
+
+func init() {
+	var err error
+	ring, err = rin.NewRing(&rin.Config{
+		QueueDepth:          4096,
+		SubmitQueuePollMode: false,
+		BufferSize:          4096,
+		UseFixedBuffer:      false,
+		MaxContexts:         4096,
+		MaxLoopNoReq:        10000,
+		MaxLoopNoResp:       10000,
+	})
+	if err != nil {
+		panic(err)
+	}
+}
+
 func (cc *clientConn) setConn(conn net.Conn) {
-	cc.bufReadConn = newBufferedReadConn(conn)
+	cc.bufReadConn = newBufferedReadConn(ring, conn)
 	if cc.pkt == nil {
-		cc.pkt = newPacketIO(cc.bufReadConn)
+		cc.pkt = newPacketIO(ring, cc.bufReadConn)
 	} else {
 		// Preserve current sequence number.
-		cc.pkt.setBufferedReadConn(cc.bufReadConn)
+		cc.pkt.setBufferedReadConn(ring, cc.bufReadConn)
 	}
 }
 

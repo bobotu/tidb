@@ -14,8 +14,10 @@
 package server
 
 import (
-	"bufio"
 	"net"
+	"os"
+
+	"github.com/pingcap/tidb/server/rin"
 )
 
 const defaultReaderSize = 16 * 1024
@@ -23,16 +25,33 @@ const defaultReaderSize = 16 * 1024
 // bufferedReadConn is a net.Conn compatible structure that reads from bufio.Reader.
 type bufferedReadConn struct {
 	net.Conn
-	rb *bufio.Reader
+	ctx  *rin.Context
+	ring *rin.Ring
+	rb   *rin.ConnReader
+	fd   *os.File
 }
 
 func (conn bufferedReadConn) Read(b []byte) (n int, err error) {
 	return conn.rb.Read(b)
 }
 
-func newBufferedReadConn(conn net.Conn) *bufferedReadConn {
+func newBufferedReadConn(ring *rin.Ring, conn net.Conn) *bufferedReadConn {
+	ctx := ring.NewContext()
+	fd, err := conn.(*net.TCPConn).File()
+	if err != nil {
+		panic(err)
+	}
 	return &bufferedReadConn{
 		Conn: conn,
-		rb:   bufio.NewReaderSize(conn, defaultReaderSize),
+		rb:   ring.NewReader(ctx, fd),
+		ctx:  ctx,
+		ring: ring,
+		fd:   fd,
 	}
+}
+
+func (conn bufferedReadConn) Close() error {
+	conn.ring.Finish(conn.ctx)
+	conn.fd.Close()
+	return conn.Conn.Close()
 }

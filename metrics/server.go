@@ -157,6 +157,30 @@ var (
 			Help:      "Bucketed histogram of all cop waiting time (s) of of slow queries.",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 22), // 1ms ~ 4096s
 		})
+
+	PacketIOTimeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "tidb",
+			Subsystem: "server",
+			Name:      "packet_io_time_histogram",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 26),  // 1us ~ 67s
+		}, []string{"op"})
+
+	UringBatchSizeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "tidb",
+			Subsystem: "server",
+			Name:      "uring_batch_size_histogram",
+			Buckets:   prometheus.ExponentialBuckets(5, 1.2, 30),
+		}, []string{"queue"})
+
+	UringProcessTimeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "tidb",
+			Subsystem: "server",
+			Name:      "uring_process_time_histogram",
+			Buckets:    prometheus.ExponentialBuckets(1, 2, 26),  // 1us ~ 67s
+		}, []string{"queue"})
 )
 
 // ExecuteErrorToLabel converts an execute error to label.
