@@ -171,6 +171,14 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 28), // 1ms ~ 1.5days
 		})
 
+	OffHeapAllocBytesGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "tidb",
+			Subsystem: "server",
+			Name:      "off_heap_alloc_bytes",
+			Help:      "Bytes of off-heap allocated memory",
+		})
+
 	MaxProcs = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "tidb",

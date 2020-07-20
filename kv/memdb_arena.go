@@ -28,6 +28,8 @@ const (
 )
 
 var (
+	EnableOffHeapAlloc = true
+
 	nullAddr = memdbArenaAddr{math.MaxUint32, math.MaxUint32}
 	endian   = binary.LittleEndian
 )
@@ -55,7 +57,7 @@ func (addr *memdbArenaAddr) load(src []byte) {
 
 type memdbArena struct {
 	blockSize int
-	blocks    []memdbArenaBlock
+	blocks    []*memdbArenaBlock
 }
 
 func (a *memdbArena) alloc(size int, align bool) (memdbArenaAddr, []byte) {
@@ -85,9 +87,7 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 	if a.blockSize > maxBlockSize {
 		a.blockSize = maxBlockSize
 	}
-	a.blocks = append(a.blocks, memdbArenaBlock{
-		buf: make([]byte, a.blockSize),
-	})
+	a.blocks = append(a.blocks, newMemdbArenaBlock(a.blockSize))
 }
 
 func (a *memdbArena) allocInLastBlock(size int, align bool) (memdbArenaAddr, []byte) {
@@ -102,6 +102,7 @@ func (a *memdbArena) allocInLastBlock(size int, align bool) (memdbArenaAddr, []b
 func (a *memdbArena) reset() {
 	for i := range a.blocks {
 		a.blocks[i].reset()
+		a.blocks[i] = nil
 	}
 	a.blocks = a.blocks[:0]
 	a.blockSize = 0
@@ -127,11 +128,6 @@ func (a *memdbArenaBlock) alloc(size int, align bool) (uint32, []byte) {
 	return uint32(offset), a.buf[offset : offset+size]
 }
 
-func (a *memdbArenaBlock) reset() {
-	a.buf = nil
-	a.length = 0
-}
-
 type memdbCheckpoint struct {
 	blockSize     int
 	blocks        int
@@ -155,7 +151,8 @@ func (a *memdbArena) checkpoint() memdbCheckpoint {
 
 func (a *memdbArena) truncate(snap *memdbCheckpoint) {
 	for i := snap.blocks; i < len(a.blocks); i++ {
-		a.blocks[i] = memdbArenaBlock{}
+		a.blocks[i].reset()
+		a.blocks[i] = nil
 	}
 	a.blocks = a.blocks[:snap.blocks]
 	if len(a.blocks) > 0 {

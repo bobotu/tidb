@@ -549,6 +549,7 @@ func setGlobalVars() {
 		log.Fatal("cannot set txn entry size limit larger than 120M")
 	}
 	kv.TxnEntrySizeLimit = cfg.Performance.TxnEntrySizeLimit
+	kv.EnableOffHeapAlloc = cfg.Performance.EnableTxnBufferOffHeapAlloc
 
 	priority := mysql.Str2Priority(cfg.Performance.ForcePriority)
 	variable.ForcePriority = int32(priority)
