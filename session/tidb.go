@@ -25,6 +25,7 @@ import (
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
 	"github.com/pingcap/parser/mysql"
@@ -275,6 +276,14 @@ func runStmt(ctx context.Context, sctx sessionctx.Context, s sqlexec.Statement) 
 	}
 	rs, err = s.Exec(ctx)
 	sessVars.TxnCtx.StatementCount++
+	failpoint.Inject("mockStmtExecFailed", func(val failpoint.Value) {
+		if err == nil && val.(bool) {
+			err = errors.New("mock error")
+			if rs != nil {
+				rs.Close()
+			}
+		}
+	})
 	if !s.IsReadOnly(sessVars) {
 		// All the history should be added here.
 		if err == nil && sessVars.TxnCtx.CouldRetry {

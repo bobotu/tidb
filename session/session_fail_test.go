@@ -60,6 +60,21 @@ func (s *testSessionSerialSuite) TestFailStatementCommit(c *C) {
 	tk.MustQuery(`select * from t`).Check(testkit.Rows("1", "2"))
 }
 
+func (s *testSessionSerialSuite) TestDirtyPresumeKNE(c *C) {
+	tk := testkit.NewTestKitWithInit(c, s.store)
+	tk.MustExec("create table t (id int primary key)")
+	tk.MustExec("insert into t values (2),(3),(4),(5)")
+
+	tk.MustExec("begin optimistic")
+	c.Assert(failpoint.Enable("github.com/pingcap/tidb/session/mockStmtExecFailed", `return(true)`), IsNil)
+	_, err := tk.Exec("insert into t values (2),(3),(4),(5)")
+	c.Assert(err, NotNil)
+	c.Assert(failpoint.Disable("github.com/pingcap/tidb/session/mockStmtExecFailed"), IsNil)
+	tk.MustExec("delete from t where id in (2, 3, 4, 5)")
+	tk.MustExec("commit")
+	c.Assert(tk.MustQuery("select * from t").Rows(), HasLen, 0)
+}
+
 func (s *testSessionSerialSuite) TestFailStatementCommitInRetry(c *C) {
 	tk := testkit.NewTestKitWithInit(c, s.store)
 	tk.MustExec("create table t (id int)")
