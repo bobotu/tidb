@@ -22,11 +22,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/tidb/util/tracing"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -216,11 +216,11 @@ func (s *RegionRequestSender) SendReqCtx(
 	rpcCtx *RPCContext,
 	err error,
 ) {
-	if span := opentracing.SpanFromContext(bo.ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("regionReqauest.SendReqCtx", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
+	span, boCtx := tracing.ChildSpanFromContext(bo.ctx, "regionReqauest.SendReqCtx")
+	defer span.Finish()
+	if boCtx != bo.ctx {
 		bo = bo.Clone()
-		bo.ctx = opentracing.ContextWithSpan(bo.ctx, span1)
+		bo.ctx = boCtx
 	}
 
 	failpoint.Inject("tikvStoreSendReqResult", func(val failpoint.Value) {
@@ -445,12 +445,13 @@ func (s *RegionRequestSender) releaseStoreToken(st *Store) {
 }
 
 func (s *RegionRequestSender) onSendFail(bo *Backoffer, ctx *RPCContext, err error) error {
-	if span := opentracing.SpanFromContext(bo.ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("regionRequest.onSendFail", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
+	span, boCtx := tracing.ChildSpanFromContext(bo.ctx, "regionRequest.onSendFail")
+	defer span.Finish()
+	if boCtx != bo.ctx {
 		bo = bo.Clone()
-		bo.ctx = opentracing.ContextWithSpan(bo.ctx, span1)
+		bo.ctx = boCtx
 	}
+
 	// If it failed because the context is cancelled by ourself, don't retry.
 	if errors.Cause(err) == context.Canceled {
 		return errors.Trace(err)
@@ -514,11 +515,11 @@ func regionErrorToLabel(e *errorpb.Error) string {
 }
 
 func (s *RegionRequestSender) onRegionError(bo *Backoffer, ctx *RPCContext, seed *uint32, regionErr *errorpb.Error) (retry bool, err error) {
-	if span := opentracing.SpanFromContext(bo.ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("tikv.onRegionError", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
+	span, boCtx := tracing.ChildSpanFromContext(bo.ctx, "tikv.onRegionError")
+	defer span.Finish()
+	if boCtx != bo.ctx {
 		bo = bo.Clone()
-		bo.ctx = opentracing.ContextWithSpan(bo.ctx, span1)
+		bo.ctx = boCtx
 	}
 
 	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr)).Inc()

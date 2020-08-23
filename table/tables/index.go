@@ -17,7 +17,6 @@ import (
 	"context"
 	"io"
 
-	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser/model"
 	"github.com/pingcap/parser/mysql"
@@ -28,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/codec"
+	"github.com/pingcap/tidb/util/tracing"
 )
 
 // indexIter is for KV store index iterator.
@@ -221,11 +221,9 @@ func (c *index) Create(sctx sessionctx.Context, us kv.UnionStore, indexedValues 
 	}
 
 	if ctx != nil {
-		if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
-			span1 := span.Tracer().StartSpan("index.Create", opentracing.ChildOf(span.Context()))
-			defer span1.Finish()
-			ctx = opentracing.ContextWithSpan(ctx, span1)
-		}
+		span, ctx1 := tracing.ChildSpanFromContext(ctx, "index.Create")
+		defer span.Finish()
+		ctx = ctx1
 	} else {
 		ctx = context.TODO()
 	}

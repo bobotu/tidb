@@ -34,10 +34,6 @@ type testTraceSuite struct {
 
 func (s *testTraceSuite) TestSpanFromContext(c *C) {
 	ctx := context.TODO()
-	noopSp := tracing.SpanFromContext(ctx)
-	// test noop span
-	_, ok := noopSp.Tracer().(opentracing.NoopTracer)
-	c.Assert(ok, IsTrue)
 
 	// test tidb tracing
 	collectedSpan := make([]basictracer.RawSpan, 1)
@@ -45,7 +41,7 @@ func (s *testTraceSuite) TestSpanFromContext(c *C) {
 		collectedSpan = append(collectedSpan, sp)
 	})
 	sp.Finish()
-	opentracing.ContextWithSpan(ctx, sp)
+	ctx = opentracing.ContextWithSpan(ctx, sp)
 	child := tracing.SpanFromContext(ctx)
 	child.Finish()
 
@@ -56,9 +52,6 @@ func (s *testTraceSuite) TestSpanFromContext(c *C) {
 
 func (s *testTraceSuite) TestChildSpanFromContext(c *C) {
 	ctx := context.TODO()
-	noopSp, _ := tracing.ChildSpanFromContxt(ctx, "")
-	_, ok := noopSp.Tracer().(opentracing.NoopTracer)
-	c.Assert(ok, IsTrue)
 
 	// test tidb tracing
 	collectedSpan := make([]basictracer.RawSpan, 1)
@@ -66,8 +59,8 @@ func (s *testTraceSuite) TestChildSpanFromContext(c *C) {
 		collectedSpan = append(collectedSpan, sp)
 	})
 	sp.Finish()
-	opentracing.ContextWithSpan(ctx, sp)
-	child, _ := tracing.ChildSpanFromContxt(ctx, "test_child")
+	ctx = opentracing.ContextWithSpan(ctx, sp)
+	child, _ := tracing.ChildSpanFromContext(ctx, "test_child")
 	child.Finish()
 
 	// verify second span's operation is not nil, this way we can ensure
@@ -119,8 +112,8 @@ func (s *testTraceSuite) TestTreeRelationship(c *C) {
 	ctx = opentracing.ContextWithSpan(ctx, sp1)
 
 	// create children span from context
-	sp2, ctx := tracing.ChildSpanFromContxt(ctx, "parent")
-	sp3, _ := tracing.ChildSpanFromContxt(ctx, "child")
+	sp2, ctx := tracing.ChildSpanFromContext(ctx, "parent")
+	sp3, _ := tracing.ChildSpanFromContext(ctx, "child")
 
 	// notify span that we are about to reach end of journey.
 	sp1.Finish()

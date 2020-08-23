@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/trace"
 	"sort"
 	"strings"
 	"time"
@@ -374,12 +375,18 @@ func Event(ctx context.Context, event string) {
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span.LogFields(tlog.String(TraceEventKey, event))
 	}
+	if trace.IsEnabled() {
+		trace.Log(ctx, TraceEventKey, event)
+	}
 }
 
 // Eventf records event in current tracing span with format support.
 func Eventf(ctx context.Context, format string, args ...interface{}) {
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span.LogFields(tlog.String(TraceEventKey, fmt.Sprintf(format, args...)))
+	}
+	if trace.IsEnabled() {
+		trace.Logf(ctx, TraceEventKey, format, args...)
 	}
 }
 

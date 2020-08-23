@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/tidb/config"
@@ -35,6 +34,7 @@ import (
 	"github.com/pingcap/tidb/util/execdetails"
 	"github.com/pingcap/tidb/util/fastrand"
 	"github.com/pingcap/tidb/util/logutil"
+	"github.com/pingcap/tidb/util/tracing"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/clientv3"
 	"go.uber.org/zap"
@@ -337,10 +337,11 @@ func (s *tikvStore) CurrentVersion() (kv.Version, error) {
 }
 
 func (s *tikvStore) getTimestampWithRetry(bo *Backoffer) (uint64, error) {
-	if span := opentracing.SpanFromContext(bo.ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("tikvStore.getTimestampWithRetry", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		bo.ctx = opentracing.ContextWithSpan(bo.ctx, span1)
+	span, boCtx := tracing.ChildSpanFromContext(bo.ctx, "tikvStore.getTimestampWithRetry")
+	defer span.Finish()
+	if boCtx != bo.ctx {
+		bo = bo.Clone()
+		bo.ctx = boCtx
 	}
 
 	for {

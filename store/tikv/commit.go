@@ -16,12 +16,12 @@ package tikv
 import (
 	"encoding/hex"
 
-	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/errors"
 	pb "github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/store/tikv/tikvrpc"
 	"github.com/pingcap/tidb/util/logutil"
+	"github.com/pingcap/tidb/util/tracing"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
@@ -142,10 +142,11 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch
 }
 
 func (c *twoPhaseCommitter) commitMutations(bo *Backoffer, mutations CommitterMutations) error {
-	if span := opentracing.SpanFromContext(bo.ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("twoPhaseCommitter.commitMutations", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		bo.ctx = opentracing.ContextWithSpan(bo.ctx, span1)
+	span, boCtx := tracing.ChildSpanFromContext(bo.ctx, "twoPhaseCommitter.commitMutations")
+	defer span.Finish()
+	if boCtx != bo.ctx {
+		bo = bo.Clone()
+		bo.ctx = boCtx
 	}
 
 	return c.doActionOnMutations(bo, actionCommit{}, mutations)

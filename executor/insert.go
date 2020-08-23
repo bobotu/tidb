@@ -18,7 +18,6 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/kv"
@@ -29,6 +28,7 @@ import (
 	"github.com/pingcap/tidb/util/logutil"
 	"github.com/pingcap/tidb/util/memory"
 	"github.com/pingcap/tidb/util/stringutil"
+	"github.com/pingcap/tidb/util/tracing"
 	"go.uber.org/zap"
 )
 
@@ -103,11 +103,8 @@ func (e *InsertExec) exec(ctx context.Context, rows [][]types.Datum) error {
 }
 
 func prefetchUniqueIndices(ctx context.Context, txn kv.Transaction, rows []toBeCheckedRow) (map[string][]byte, error) {
-	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("prefetchUniqueIndices", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		ctx = opentracing.ContextWithSpan(ctx, span1)
-	}
+	span, ctx := tracing.ChildSpanFromContext(ctx, "prefetchUniqueIndices")
+	defer span.Finish()
 
 	nKeys := 0
 	for _, r := range rows {
@@ -129,11 +126,8 @@ func prefetchUniqueIndices(ctx context.Context, txn kv.Transaction, rows []toBeC
 }
 
 func prefetchConflictedOldRows(ctx context.Context, txn kv.Transaction, rows []toBeCheckedRow, values map[string][]byte) error {
-	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("prefetchConflictedOldRows", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		ctx = opentracing.ContextWithSpan(ctx, span1)
-	}
+	span, ctx := tracing.ChildSpanFromContext(ctx, "prefetchConflictedOldRows")
+	defer span.Finish()
 
 	batchKeys := make([]kv.Key, 0, len(rows))
 	for _, r := range rows {
@@ -152,11 +146,9 @@ func prefetchConflictedOldRows(ctx context.Context, txn kv.Transaction, rows []t
 }
 
 func prefetchDataCache(ctx context.Context, txn kv.Transaction, rows []toBeCheckedRow) error {
-	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("prefetchDataCache", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		ctx = opentracing.ContextWithSpan(ctx, span1)
-	}
+	span, ctx := tracing.ChildSpanFromContext(ctx, "prefetchDataCache")
+	defer span.Finish()
+
 	values, err := prefetchUniqueIndices(ctx, txn, rows)
 	if err != nil {
 		return err
