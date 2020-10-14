@@ -17,7 +17,7 @@ import "bytes"
 
 type memdbIterator struct {
 	db           *memdb
-	curr         memdbNodeAddr
+	curr         memdbNodeWrapper
 	start        Key
 	end          Key
 	reverse      bool
@@ -113,10 +113,7 @@ func (i *memdbIterator) Key() Key {
 }
 
 func (i *memdbIterator) Handle() MemKeyHandle {
-	return MemKeyHandle{
-		idx: uint16(i.curr.addr.idx),
-		off: i.curr.addr.off,
-	}
+	return i.curr.addr
 }
 
 func (i *memdbIterator) Value() []byte {
@@ -142,7 +139,7 @@ func (i *memdbIterator) Next() error {
 func (i *memdbIterator) Close() {}
 
 func (i *memdbIterator) seekToFirst() {
-	y := memdbNodeAddr{nil, nullAddr}
+	y := memdbNodeWrapper{nil, nullNodeAddr}
 	x := i.db.getNode(i.db.root)
 
 	for !x.isNull() {
@@ -154,7 +151,7 @@ func (i *memdbIterator) seekToFirst() {
 }
 
 func (i *memdbIterator) seekToLast() {
-	y := memdbNodeAddr{nil, nullAddr}
+	y := memdbNodeWrapper{nil, nullNodeAddr}
 	x := i.db.getNode(i.db.root)
 
 	for !x.isNull() {
@@ -166,7 +163,7 @@ func (i *memdbIterator) seekToLast() {
 }
 
 func (i *memdbIterator) seek(key Key) {
-	y := memdbNodeAddr{nil, nullAddr}
+	y := memdbNodeWrapper{nil, nullNodeAddr}
 	x := i.db.getNode(i.db.root)
 
 	var cmp int

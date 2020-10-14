@@ -126,16 +126,7 @@ var tombstone = []byte{}
 func IsTombstone(val []byte) bool { return len(val) == 0 }
 
 // MemKeyHandle represents a pointer for key in MemBuffer.
-type MemKeyHandle struct {
-	// Opaque user data
-	UserData uint16
-	idx      uint16
-	off      uint32
-}
-
-func (h MemKeyHandle) toAddr() memdbArenaAddr {
-	return memdbArenaAddr{idx: uint32(h.idx), off: h.off}
-}
+type MemKeyHandle = memdbNodeAddr
 
 // memdb is rollbackable Red-Black Tree optimized for TiDB's transaction states buffer use scenario.
 // You can think memdb is a combination of two separate tree map, one for key => value and another for key => keyFlags.
@@ -149,7 +140,7 @@ type memdb struct {
 	// This RWMutex only used to ensure memdbSnapGetter.Get will not race with
 	// concurrent memdb.Set, memdb.SetWithFlags, memdb.Delete and memdb.UpdateFlags.
 	sync.RWMutex
-	root      memdbArenaAddr
+	root      memdbNodeAddr
 	allocator nodeAllocator
 	vlog      memdbVlog
 
@@ -166,7 +157,7 @@ type memdb struct {
 func newMemDB() *memdb {
 	db := new(memdb)
 	db.allocator.init()
-	db.root = nullAddr
+	db.root = nullNodeAddr
 	db.stages = make([]memdbCheckpoint, 0, 2)
 	db.entrySizeLimit = atomic.LoadUint64(&TxnEntrySizeLimit)
 	db.bufferSizeLimit = atomic.LoadUint64(&TxnTotalSizeLimit)
@@ -223,7 +214,7 @@ func (db *memdb) Cleanup(h StagingHandle) {
 }
 
 func (db *memdb) Reset() {
-	db.root = nullAddr
+	db.root = nullNodeAddr
 	db.stages = db.stages[:0]
 	db.dirty = false
 	db.vlogInvalid = false
@@ -271,7 +262,7 @@ func (db *memdb) SelectValueHistory(key Key, predicate func(value []byte) bool) 
 		// A flag only key, act as value not exists
 		return nil, ErrNotExist
 	}
-	result := db.vlog.selectValueHistory(x.vptr, func(addr memdbArenaAddr) bool {
+	result := db.vlog.selectValueHistory(x.vptr, func(addr memdbValueAddr) bool {
 		return predicate(db.vlog.getValue(addr))
 	})
 	if result.isNull() {
@@ -312,7 +303,7 @@ func (db *memdb) Delete(key Key) error {
 }
 
 func (db *memdb) GetKeyByHandle(handle MemKeyHandle) []byte {
-	x := db.getNode(handle.toAddr())
+	x := db.getNode(handle)
 	return x.getKey()
 }
 
@@ -320,7 +311,7 @@ func (db *memdb) GetValueByHandle(handle MemKeyHandle) ([]byte, bool) {
 	if db.vlogInvalid {
 		return nil, false
 	}
-	x := db.getNode(handle.toAddr())
+	x := db.getNode(handle)
 	if x.vptr.isNull() {
 		return nil, false
 	}
@@ -378,7 +369,7 @@ func (db *memdb) set(key Key, value []byte, ops ...FlagsOp) error {
 	return nil
 }
 
-func (db *memdb) setValue(x memdbNodeAddr, value []byte) {
+func (db *memdb) setValue(x memdbNodeWrapper, value []byte) {
 	var activeCp *memdbCheckpoint
 	if len(db.stages) > 0 {
 		activeCp = &db.stages[len(db.stages)-1]
@@ -403,9 +394,9 @@ func (db *memdb) setValue(x memdbNodeAddr, value []byte) {
 
 // traverse search for and if not found and insert is true, will add a new node in.
 // Returns a pointer to the new node, or the node found.
-func (db *memdb) traverse(key Key, insert bool) memdbNodeAddr {
+func (db *memdb) traverse(key Key, insert bool) memdbNodeWrapper {
 	x := db.getRoot()
-	y := memdbNodeAddr{nil, nullAddr}
+	y := memdbNodeWrapper{nil, nullNodeAddr}
 	found := false
 
 	// walk x down the tree
@@ -439,8 +430,8 @@ func (db *memdb) traverse(key Key, insert bool) memdbNodeAddr {
 		}
 	}
 
-	z.left = nullAddr
-	z.right = nullAddr
+	z.left = nullNodeAddr
+	z.right = nullNodeAddr
 
 	// colour this new node red
 	z.setRed()
@@ -531,7 +522,7 @@ func (db *memdb) traverse(key Key, insert bool) memdbNodeAddr {
 // We assume that neither X nor Y is NULL
 //
 
-func (db *memdb) leftRotate(x memdbNodeAddr) {
+func (db *memdb) leftRotate(x memdbNodeWrapper) {
 	y := x.getRight(db)
 
 	// Turn Y's left subtree into X's right subtree (move B)
@@ -565,7 +556,7 @@ func (db *memdb) leftRotate(x memdbNodeAddr) {
 	x.up = y.addr
 }
 
-func (db *memdb) rightRotate(y memdbNodeAddr) {
+func (db *memdb) rightRotate(y memdbNodeWrapper) {
 	x := y.getLeft(db)
 
 	// Turn X's right subtree into Y's left subtree (move B)
@@ -599,8 +590,8 @@ func (db *memdb) rightRotate(y memdbNodeAddr) {
 	y.up = x.addr
 }
 
-func (db *memdb) deleteNode(z memdbNodeAddr) {
-	var x, y memdbNodeAddr
+func (db *memdb) deleteNode(z memdbNodeWrapper) {
+	var x, y memdbNodeWrapper
 
 	db.count--
 	db.size -= int(z.klen)
@@ -645,7 +636,7 @@ func (db *memdb) deleteNode(z memdbNodeAddr) {
 	db.allocator.freeNode(z.addr)
 }
 
-func (db *memdb) replaceNode(old memdbNodeAddr, new memdbNodeAddr) {
+func (db *memdb) replaceNode(old memdbNodeWrapper, new memdbNodeWrapper) {
 	if !old.up.isNull() {
 		oldUp := old.getUp(db)
 		if old.addr == oldUp.left {
@@ -673,7 +664,7 @@ func (db *memdb) replaceNode(old memdbNodeAddr, new memdbNodeAddr) {
 	}
 }
 
-func (db *memdb) deleteNodeFix(x memdbNodeAddr) {
+func (db *memdb) deleteNodeFix(x memdbNodeWrapper) {
 	for x.addr != db.root && x.isBlack() {
 		xUp := x.getUp(db)
 		if x.addr == xUp.left {
@@ -743,7 +734,7 @@ func (db *memdb) deleteNodeFix(x memdbNodeAddr) {
 	x.setBlack()
 }
 
-func (db *memdb) successor(x memdbNodeAddr) (y memdbNodeAddr) {
+func (db *memdb) successor(x memdbNodeWrapper) (y memdbNodeWrapper) {
 	if !x.right.isNull() {
 		// If right is not NULL then go right one and
 		// then keep going left until we find a node with
@@ -768,7 +759,7 @@ func (db *memdb) successor(x memdbNodeAddr) (y memdbNodeAddr) {
 	return y
 }
 
-func (db *memdb) predecessor(x memdbNodeAddr) (y memdbNodeAddr) {
+func (db *memdb) predecessor(x memdbNodeWrapper) (y memdbNodeWrapper) {
 	if !x.left.isNull() {
 		// If left is not NULL then go left one and
 		// then keep going right until we find a node with
@@ -793,47 +784,47 @@ func (db *memdb) predecessor(x memdbNodeAddr) (y memdbNodeAddr) {
 	return y
 }
 
-func (db *memdb) getNode(x memdbArenaAddr) memdbNodeAddr {
-	return memdbNodeAddr{db.allocator.getNode(x), x}
+func (db *memdb) getNode(x memdbNodeAddr) memdbNodeWrapper {
+	return memdbNodeWrapper{db.allocator.getNode(x), x}
 }
 
-func (db *memdb) getRoot() memdbNodeAddr {
+func (db *memdb) getRoot() memdbNodeWrapper {
 	return db.getNode(db.root)
 }
 
-func (db *memdb) allocNode(key Key) memdbNodeAddr {
+func (db *memdb) allocNode(key Key) memdbNodeWrapper {
 	db.size += len(key)
 	db.count++
 	x, xn := db.allocator.allocNode(key)
-	return memdbNodeAddr{xn, x}
+	return memdbNodeWrapper{xn, x}
 }
 
-type memdbNodeAddr struct {
+type memdbNodeWrapper struct {
 	*memdbNode
-	addr memdbArenaAddr
+	addr memdbNodeAddr
 }
 
-func (a *memdbNodeAddr) isNull() bool {
+func (a *memdbNodeWrapper) isNull() bool {
 	return a.addr.isNull()
 }
 
-func (a memdbNodeAddr) getUp(db *memdb) memdbNodeAddr {
+func (a memdbNodeWrapper) getUp(db *memdb) memdbNodeWrapper {
 	return db.getNode(a.up)
 }
 
-func (a memdbNodeAddr) getLeft(db *memdb) memdbNodeAddr {
+func (a memdbNodeWrapper) getLeft(db *memdb) memdbNodeWrapper {
 	return db.getNode(a.left)
 }
 
-func (a memdbNodeAddr) getRight(db *memdb) memdbNodeAddr {
+func (a memdbNodeWrapper) getRight(db *memdb) memdbNodeWrapper {
 	return db.getNode(a.right)
 }
 
 type memdbNode struct {
-	up    memdbArenaAddr
-	left  memdbArenaAddr
-	right memdbArenaAddr
-	vptr  memdbArenaAddr
+	vptr  memdbValueAddr
+	up    memdbNodeAddr
+	left  memdbNodeAddr
+	right memdbNodeAddr
 	klen  uint16
 	flags uint8
 }

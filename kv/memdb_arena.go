@@ -28,52 +28,69 @@ const (
 )
 
 var (
-	nullAddr = memdbArenaAddr{math.MaxUint32, math.MaxUint32}
-	endian   = binary.LittleEndian
+	nullValueAddr = memdbValueAddr{math.MaxUint32, math.MaxUint32}
+	nullNodeAddr  = memdbNodeAddr(math.MaxUint32)
+	endian        = binary.LittleEndian
 )
 
-type memdbArenaAddr struct {
+type memdbNodeAddr uint32
+
+func encodeNodeAddr(index int, offsetIndex uint32) memdbNodeAddr {
+	return memdbNodeAddr((offsetIndex << 8) | uint32(index&0xff))
+}
+
+func (addr memdbNodeAddr) index() uint32 {
+	return uint32(addr & 0xff)
+}
+
+func (addr memdbNodeAddr) offsetIndex() uint32 {
+	return uint32(addr >> 8)
+}
+
+func (addr memdbNodeAddr) isNull() bool {
+	return addr == nullNodeAddr
+}
+
+func (addr memdbNodeAddr) store(dst []byte) {
+	endian.PutUint32(dst, uint32(addr))
+}
+
+func (addr *memdbNodeAddr) load(src []byte) {
+	*addr = memdbNodeAddr(endian.Uint32(src))
+}
+
+func (addr memdbNodeAddr) size() int {
+	return 4
+}
+
+type memdbValueAddr struct {
 	idx uint32
 	off uint32
 }
 
-func (addr memdbArenaAddr) isNull() bool {
-	return addr == nullAddr
+func (addr memdbValueAddr) isNull() bool {
+	return addr == nullValueAddr
 }
 
 // store and load is used by vlog, due to pointer in vlog is not aligned.
 
-func (addr memdbArenaAddr) store(dst []byte) {
+func (addr memdbValueAddr) store(dst []byte) {
 	endian.PutUint32(dst, addr.idx)
 	endian.PutUint32(dst[4:], addr.off)
 }
 
-func (addr *memdbArenaAddr) load(src []byte) {
+func (addr *memdbValueAddr) load(src []byte) {
 	addr.idx = endian.Uint32(src)
 	addr.off = endian.Uint32(src[4:])
+}
+
+func (addr memdbValueAddr) size() int {
+	return 8
 }
 
 type memdbArena struct {
 	blockSize int
 	blocks    []memdbArenaBlock
-}
-
-func (a *memdbArena) alloc(size int, align bool) (memdbArenaAddr, []byte) {
-	if size > maxBlockSize {
-		panic("alloc size is larger than max block size")
-	}
-
-	if len(a.blocks) == 0 {
-		a.enlarge(size, initBlockSize)
-	}
-
-	addr, data := a.allocInLastBlock(size, align)
-	if !addr.isNull() {
-		return addr, data
-	}
-
-	a.enlarge(size, a.blockSize<<1)
-	return a.allocInLastBlock(size, align)
 }
 
 func (a *memdbArena) enlarge(allocSize, blockSize int) {
@@ -86,17 +103,9 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 		a.blockSize = maxBlockSize
 	}
 	a.blocks = append(a.blocks, memdbArenaBlock{
-		buf: make([]byte, a.blockSize),
+		buf:  make([]byte, a.blockSize),
+		tail: uint32(a.blockSize),
 	})
-}
-
-func (a *memdbArena) allocInLastBlock(size int, align bool) (memdbArenaAddr, []byte) {
-	idx := len(a.blocks) - 1
-	offset, data := a.blocks[idx].alloc(size, align)
-	if offset == nullBlockOffset {
-		return nullAddr, nil
-	}
-	return memdbArenaAddr{uint32(idx), offset}, data
 }
 
 func (a *memdbArena) reset() {
@@ -108,34 +117,21 @@ func (a *memdbArena) reset() {
 }
 
 type memdbArenaBlock struct {
-	buf    []byte
-	length int
-}
-
-func (a *memdbArenaBlock) alloc(size int, align bool) (uint32, []byte) {
-	offset := a.length
-	if align {
-		// We must align the allocated address for node
-		// to make runtime.checkptrAlignment happy.
-		offset = (a.length + 7) & alignMask
-	}
-	newLen := offset + size
-	if newLen > len(a.buf) {
-		return nullBlockOffset, nil
-	}
-	a.length = newLen
-	return uint32(offset), a.buf[offset : offset+size]
+	head uint32
+	tail uint32
+	buf  []byte
 }
 
 func (a *memdbArenaBlock) reset() {
 	a.buf = nil
-	a.length = 0
+	a.head = 0
+	a.tail = 0
 }
 
 type memdbCheckpoint struct {
 	blockSize     int
 	blocks        int
-	offsetInBlock int
+	offsetInBlock uint32
 }
 
 func (cp *memdbCheckpoint) isSamePosition(other *memdbCheckpoint) bool {
@@ -148,7 +144,7 @@ func (a *memdbArena) checkpoint() memdbCheckpoint {
 		blocks:    len(a.blocks),
 	}
 	if len(a.blocks) > 0 {
-		snap.offsetInBlock = a.blocks[len(a.blocks)-1].length
+		snap.offsetInBlock = a.blocks[len(a.blocks)-1].head
 	}
 	return snap
 }
@@ -159,7 +155,7 @@ func (a *memdbArena) truncate(snap *memdbCheckpoint) {
 	}
 	a.blocks = a.blocks[:snap.blocks]
 	if len(a.blocks) > 0 {
-		a.blocks[len(a.blocks)-1].length = snap.offsetInBlock
+		a.blocks[len(a.blocks)-1].head = snap.offsetInBlock
 	}
 	a.blockSize = snap.blockSize
 }
@@ -175,42 +171,76 @@ type nodeAllocator struct {
 
 func (a *nodeAllocator) init() {
 	a.nullNode = memdbNode{
-		up:    nullAddr,
-		left:  nullAddr,
-		right: nullAddr,
-		vptr:  nullAddr,
+		up:    nullNodeAddr,
+		left:  nullNodeAddr,
+		right: nullNodeAddr,
+		vptr:  nullValueAddr,
 	}
 }
 
-func (a *nodeAllocator) getNode(addr memdbArenaAddr) *memdbNode {
+func (a *nodeAllocator) getNode(addr memdbNodeAddr) *memdbNode {
 	if addr.isNull() {
 		return &a.nullNode
 	}
 
-	return (*memdbNode)(unsafe.Pointer(&a.blocks[addr.idx].buf[addr.off]))
+	idx := addr.index()
+	offsetIdx := addr.offsetIndex()
+	blk := &a.blocks[idx]
+	offsetStart := len(blk.buf) - int(offsetIdx+1)*4
+	offset := endian.Uint32(blk.buf[offsetStart:])
+	return (*memdbNode)(unsafe.Pointer(&blk.buf[offset]))
 }
 
-func (a *nodeAllocator) allocNode(key Key) (memdbArenaAddr, *memdbNode) {
-	nodeSize := 8*4 + 2 + 1 + len(key)
-	addr, mem := a.alloc(nodeSize, true)
+func (a *nodeAllocator) allocNode(key Key) (memdbNodeAddr, *memdbNode) {
+	size := 8*4 + 2 + 1 + len(key)
+	if size > maxBlockSize {
+		panic("alloc size is larger than max block size")
+	}
+
+	if len(a.blocks) == 0 {
+		a.enlarge(size, initBlockSize)
+	}
+
+	addr, mem := a.allocInLastBlock(size)
+	if addr.isNull() {
+		a.enlarge(size, a.blockSize<<1)
+		addr, mem = a.allocInLastBlock(size)
+	}
+
 	n := (*memdbNode)(unsafe.Pointer(&mem[0]))
-	n.vptr = nullAddr
+	n.vptr = nullValueAddr
 	n.klen = uint16(len(key))
 	copy(n.getKey(), key)
 	return addr, n
 }
 
+func (a *nodeAllocator) allocInLastBlock(size int) (memdbNodeAddr, []byte) {
+	idx := len(a.blocks) - 1
+	blk := &a.blocks[idx]
+	offset := blk.head
+	newHead := (offset + uint32(size) + 7) & alignMask
+	newTail := blk.tail - 4
+	if newHead > newTail {
+		return nullNodeAddr, nil
+	}
+
+	blk.head, blk.tail = newHead, newTail
+	endian.PutUint32(blk.buf[newTail:], offset)
+	offsetIdx := (uint32(len(blk.buf))-newTail)/4 - 1
+	return encodeNodeAddr(idx, offsetIdx), blk.buf[offset:newHead]
+}
+
 var testMode = false
 
-func (a *nodeAllocator) freeNode(addr memdbArenaAddr) {
+func (a *nodeAllocator) freeNode(addr memdbNodeAddr) {
 	if testMode {
 		// Make it easier for debug.
 		n := a.getNode(addr)
-		badAddr := nullAddr
+		badAddr := nullValueAddr
 		badAddr.idx--
-		n.left = badAddr
-		n.right = badAddr
-		n.up = badAddr
+		n.left = memdbNodeAddr(badAddr.idx)
+		n.right = memdbNodeAddr(badAddr.idx)
+		n.up = memdbNodeAddr(badAddr.idx)
 		n.vptr = badAddr
 		return
 	}
@@ -222,25 +252,21 @@ func (a *nodeAllocator) reset() {
 	a.init()
 }
 
-type memdbVlog struct {
-	memdbArena
-}
-
 type memdbVlogHdr struct {
-	nodeAddr memdbArenaAddr
-	oldValue memdbArenaAddr
 	valueLen uint32
+	nodeAddr memdbNodeAddr
+	oldValue memdbValueAddr
 }
 
 func (hdr *memdbVlogHdr) store(dst []byte) {
 	cursor := 0
 	hdr.nodeAddr.store(dst[cursor:])
-	cursor += 8
+	cursor += hdr.nodeAddr.size()
 
 	vLen := hdr.valueLen << 1
 	if !hdr.oldValue.isNull() {
 		hdr.oldValue.store(dst[cursor:])
-		cursor += 8
+		cursor += hdr.oldValue.size()
 		vLen |= 1
 	}
 
@@ -253,29 +279,68 @@ func (hdr *memdbVlogHdr) load(src []byte) {
 	hdr.valueLen = vLen >> 1
 
 	if vLen&1 != 0 {
-		cursor -= 8
+		cursor -= hdr.oldValue.size()
 		hdr.oldValue.load(src[cursor:])
 	} else {
-		hdr.oldValue = nullAddr
+		hdr.oldValue = nullValueAddr
 	}
 
-	cursor -= 8
+	cursor -= hdr.nodeAddr.size()
 	hdr.nodeAddr.load(src[cursor:])
 }
 
 func (hdr *memdbVlogHdr) size() int {
-	sz := 8 + 4
 	if !hdr.oldValue.isNull() {
-		sz += 8
+		return 16
 	}
-	return sz
+	return 8
 }
 
-func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr, value []byte) memdbArenaAddr {
-	hdr := memdbVlogHdr{nodeAddr, oldValue, uint32(len(value))}
+type memdbVlog struct {
+	memdbArena
+}
+
+func (l *memdbVlog) alloc(size int) (memdbValueAddr, []byte) {
+	if size > maxBlockSize {
+		panic("alloc size is larger than max block size")
+	}
+
+	if len(l.blocks) == 0 {
+		l.enlarge(size, initBlockSize)
+	}
+
+	addr, data := l.allocInLastBlock(size)
+	if !addr.isNull() {
+		return addr, data
+	}
+
+	l.enlarge(size, l.blockSize<<1)
+	return l.allocInLastBlock(size)
+}
+
+func (l *memdbVlog) allocInLastBlock(size int) (memdbValueAddr, []byte) {
+	idx := len(l.blocks) - 1
+	blk := &l.blocks[idx]
+	offset := int(blk.head)
+	newLen := offset + size
+	if newLen > len(blk.buf) {
+		return nullValueAddr, nil
+	}
+
+	blk.head = uint32(newLen)
+	addr := memdbValueAddr{uint32(idx), uint32(offset)}
+	return addr, blk.buf[offset:newLen]
+}
+
+func (l *memdbVlog) appendValue(nodeAddr memdbNodeAddr, oldValue memdbValueAddr, value []byte) memdbValueAddr {
+	hdr := memdbVlogHdr{
+		nodeAddr: nodeAddr,
+		oldValue: oldValue,
+		valueLen: uint32(len(value)),
+	}
 
 	size := hdr.size() + len(value)
-	addr, mem := l.alloc(size, false)
+	addr, mem := l.alloc(size)
 
 	copy(mem, value)
 	hdr.store(mem[len(value):])
@@ -284,12 +349,12 @@ func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr
 	return addr
 }
 
-func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
+func (l *memdbVlog) getValue(addr memdbValueAddr) []byte {
 	_, v := l.getHdrAndValue(addr)
 	return v
 }
 
-func (l *memdbVlog) getHdrAndValue(addr memdbArenaAddr) (memdbVlogHdr, []byte) {
+func (l *memdbVlog) getHdrAndValue(addr memdbValueAddr) (memdbVlogHdr, []byte) {
 	block := l.blocks[addr.idx].buf
 	var hdr memdbVlogHdr
 	hdr.load(block[:addr.off])
@@ -301,8 +366,8 @@ func (l *memdbVlog) getHdrAndValue(addr memdbArenaAddr) (memdbVlogHdr, []byte) {
 	return hdr, block[valueOff:hdrOff:hdrOff]
 }
 
-func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *memdbCheckpoint) ([]byte, bool) {
-	result := l.selectValueHistory(addr, func(addr memdbArenaAddr) bool {
+func (l *memdbVlog) getSnapshotValue(addr memdbValueAddr, snap *memdbCheckpoint) ([]byte, bool) {
+	result := l.selectValueHistory(addr, func(addr memdbValueAddr) bool {
 		return !l.canModify(snap, addr)
 	})
 	if result.isNull() {
@@ -311,7 +376,7 @@ func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *memdbCheckpoint)
 	return l.getValue(addr), true
 }
 
-func (l *memdbVlog) selectValueHistory(addr memdbArenaAddr, predicate func(memdbArenaAddr) bool) memdbArenaAddr {
+func (l *memdbVlog) selectValueHistory(addr memdbValueAddr, predicate func(memdbValueAddr) bool) memdbValueAddr {
 	for !addr.isNull() {
 		if predicate(addr) {
 			return addr
@@ -319,13 +384,13 @@ func (l *memdbVlog) selectValueHistory(addr memdbArenaAddr, predicate func(memdb
 		hdr, _ := l.getHdrAndValue(addr)
 		addr = hdr.oldValue
 	}
-	return nullAddr
+	return nullValueAddr
 }
 
 func (l *memdbVlog) revertToCheckpoint(db *memdb, cp *memdbCheckpoint) {
 	cursor := l.checkpoint()
 	for !cp.isSamePosition(&cursor) {
-		cursorAddr := memdbArenaAddr{idx: uint32(cursor.blocks - 1), off: uint32(cursor.offsetInBlock)}
+		cursorAddr := memdbValueAddr{idx: uint32(cursor.blocks - 1), off: cursor.offsetInBlock}
 		hdr, _ := l.getHdrAndValue(cursorAddr)
 		node := db.getNode(hdr.nodeAddr)
 
@@ -352,7 +417,7 @@ func (l *memdbVlog) revertToCheckpoint(db *memdb, cp *memdbCheckpoint) {
 func (l *memdbVlog) inspectKVInLog(db *memdb, head, tail *memdbCheckpoint, f func(Key, KeyFlags, []byte)) {
 	cursor := *tail
 	for !head.isSamePosition(&cursor) {
-		cursorAddr := memdbArenaAddr{idx: uint32(cursor.blocks - 1), off: uint32(cursor.offsetInBlock)}
+		cursorAddr := memdbValueAddr{idx: uint32(cursor.blocks - 1), off: cursor.offsetInBlock}
 		hdr, value := l.getHdrAndValue(cursorAddr)
 		node := db.allocator.getNode(hdr.nodeAddr)
 
@@ -366,23 +431,23 @@ func (l *memdbVlog) inspectKVInLog(db *memdb, head, tail *memdbCheckpoint, f fun
 }
 
 func (l *memdbVlog) moveBackCursor(cursor *memdbCheckpoint, hdr *memdbVlogHdr) {
-	cursor.offsetInBlock -= hdr.size() + int(hdr.valueLen)
+	cursor.offsetInBlock -= uint32(hdr.size()) + hdr.valueLen
 	if cursor.offsetInBlock == 0 {
 		cursor.blocks--
 		if cursor.blocks > 0 {
-			cursor.offsetInBlock = l.blocks[cursor.blocks-1].length
+			cursor.offsetInBlock = l.blocks[cursor.blocks-1].head
 		}
 	}
 }
 
-func (l *memdbVlog) canModify(cp *memdbCheckpoint, addr memdbArenaAddr) bool {
+func (l *memdbVlog) canModify(cp *memdbCheckpoint, addr memdbValueAddr) bool {
 	if cp == nil {
 		return true
 	}
 	if int(addr.idx) > cp.blocks-1 {
 		return true
 	}
-	if int(addr.idx) == cp.blocks-1 && int(addr.off) > cp.offsetInBlock {
+	if int(addr.idx) == cp.blocks-1 && addr.off > cp.offsetInBlock {
 		return true
 	}
 	return false
