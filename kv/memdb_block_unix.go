@@ -24,7 +24,7 @@ import (
 )
 
 func newMemdbArenaBlock(blockSize int) *memdbArenaBlock {
-	if blockSize < maxBlockSize || !EnableOffHeapAlloc {
+	if !EnableOffHeapAlloc {
 		return &memdbArenaBlock{
 			buf: make([]byte, blockSize),
 		}
@@ -41,7 +41,7 @@ func newMemdbArenaBlock(blockSize int) *memdbArenaBlock {
 
 func (a *memdbArenaBlock) reset() {
 	size := cap(a.buf)
-	if size == maxBlockSize && EnableOffHeapAlloc {
+	if EnableOffHeapAlloc {
 		err := unix.Munmap(a.buf)
 		if err != nil {
 			panic(errors.Errorf("failed to free memory %s", err))
