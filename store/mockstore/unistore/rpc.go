@@ -77,6 +77,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	default:
 	}
 
+	req = proto.Clone(req).(*tikvrpc.Request)
 	if atomic.LoadInt32(&c.closed) != 0 {
 		// Return `context.Canceled` can break Backoff.
 		return nil, context.Canceled

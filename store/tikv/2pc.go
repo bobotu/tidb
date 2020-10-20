@@ -689,6 +689,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 					zap.Error(e))
 				tikvSecondaryLockCleanupFailureCounterCommit.Inc()
 			}
+			c.txn.Reset()
 		}()
 	} else {
 		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
@@ -915,6 +916,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 			logutil.Logger(ctx).Info("2PC clean up done",
 				zap.Uint64("txnStartTS", c.startTS))
 		}
+		c.txn.Reset()
 		c.cleanWg.Done()
 	}()
 }
