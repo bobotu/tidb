@@ -17,7 +17,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"runtime"
 	"strconv"
@@ -69,7 +68,6 @@ import (
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/automaxprocs/maxprocs"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/grpclog"
 )
 
 // Flag Names
@@ -613,12 +611,7 @@ func setupLog() {
 
 	err = logutil.InitLogger(cfg.Log.ToLogConfig())
 	terror.MustNil(err)
-
-	if len(os.Getenv("GRPC_DEBUG")) > 0 {
-		grpclog.SetLoggerV2(grpclog.NewLoggerV2WithVerbosity(os.Stderr, os.Stderr, os.Stderr, 999))
-	} else {
-		grpclog.SetLoggerV2(grpclog.NewLoggerV2(ioutil.Discard, ioutil.Discard, os.Stderr))
-	}
+	metrics.SetupGRPCInspector()
 	// trigger internal http(s) client init.
 	util.InternalHTTPClient()
 }
