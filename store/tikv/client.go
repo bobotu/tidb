@@ -42,7 +42,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
-	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/keepalive"
@@ -364,10 +363,6 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	clientConn := connArray.Get()
-	if state := clientConn.GetState(); state == connectivity.TransientFailure {
-		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
-		metrics.GRPCConnTransientFailureCounter.WithLabelValues(addr, storeID).Inc()
-	}
 
 	if req.IsDebugReq() {
 		client := debugpb.NewDebugClient(clientConn)
