@@ -172,4 +172,5 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVOnePCTxnCounter)
 	prometheus.MustRegister(MaxProcs)
 	prometheus.MustRegister(GOGC)
+	prometheus.MustRegister(newGRPCCollector())
 }
