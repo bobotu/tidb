@@ -16,6 +16,7 @@ package metrics
 import (
 	"context"
 	"math"
+	"strconv"
 	_ "unsafe"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -36,7 +37,7 @@ func newGRPCCollector() *grpcCollector {
 		callsDesc: prometheus.NewDesc(
 			"tidb_grpc_channel_calls",
 			"gRPC channel connection state",
-			[]string{"target", "state"}, nil),
+			[]string{"target", "state", "id"}, nil),
 		channelCntDesc: prometheus.NewDesc(
 			"tidb_grpc_channel_count",
 			"gRPC channel count by connection states",
@@ -44,7 +45,7 @@ func newGRPCCollector() *grpcCollector {
 		stateDesc: prometheus.NewDesc(
 			"tidb_grpc_channel_state",
 			"gRPC connection state of channel",
-			[]string{"target", "state"}, nil),
+			[]string{"target", "state", "id"}, nil),
 	}
 }
 
@@ -70,15 +71,16 @@ func (g *grpcCollector) Collect(metrics chan<- prometheus.Metric) {
 
 		for _, ch := range resp.Channel {
 			start = ch.Ref.ChannelId
+			id := strconv.FormatInt(ch.Ref.ChannelId, 10)
 
 			channelStates[ch.Data.State.State]++
 			metrics <- prometheus.MustNewConstMetric(g.stateDesc, prometheus.GaugeValue,
-				1, ch.Data.Target, ch.Data.State.State.String())
+				1, ch.Data.Target, ch.Data.State.State.String(), id)
 
 			metrics <- prometheus.MustNewConstMetric(g.callsDesc, prometheus.GaugeValue,
-				float64(ch.Data.CallsSucceeded), ch.Data.Target, "succeeded")
+				float64(ch.Data.CallsSucceeded), ch.Data.Target, "succeeded", id)
 			metrics <- prometheus.MustNewConstMetric(g.callsDesc, prometheus.GaugeValue,
-				float64(ch.Data.CallsFailed), ch.Data.Target, "failed")
+				float64(ch.Data.CallsFailed), ch.Data.Target, "failed", id)
 		}
 
 		if resp.End {
